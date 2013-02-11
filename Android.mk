@@ -337,6 +337,8 @@ ifeq ($(ENABLE_WEBGL),true)
 LOCAL_CFLAGS += -DENABLE_WEBGL
 endif
 
+LOCAL_CFLAGS += -DENABLE_WEB_SOCKETS=1
+
 # LOCAL_LDLIBS is used in simulator builds only and simulator builds are only
 # valid on Linux
 LOCAL_LDLIBS += -lpthread -ldl
