@@ -23,6 +23,11 @@
 ## OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ##
 
+# Control WebGL compiling in webkit.
+ifneq ($(ENABLE_WEBGL),true)
+    ENABLE_WEBGL = false
+endif
+
 # Control SVG compiling in webkit.
 # Default is true unless explictly disabled.
 ifneq ($(ENABLE_SVG),false)
@@ -54,6 +59,10 @@ $(hide) $(YACC) $(PRIVATE_YACCFLAGS) -o $@ $<
 @echo '#endif' >> $(@:$1=.h)
 @rm -f $(@:$1=$(YACC_HEADER_SUFFIX))
 endef
+
+ifneq ($(ENABLE_WEBAUDIO),false)
+  ENABLE_WEBAUDIO = true
+endif
 
 BASE_PATH := $(call my-dir)
 include $(CLEAR_VARS)
@@ -102,6 +111,14 @@ LOCAL_C_INCLUDES := \
 	external/sqlite/dist \
 	frameworks/base/core/jni/android/graphics \
 	frameworks/base/include
+
+LOCAL_C_INCLUDES += external/libpng \
+                    external/zlib
+
+ifeq ($(ENABLE_WEBGL),true)
+LOCAL_C_INCLUDES += frameworks/native/include/gui \
+                    frameworks/native/include/private/gui
+endif
 
 # Add Source/ for the include of <JavaScriptCore/config.h> from WebCore/config.h
 LOCAL_C_INCLUDES := $(LOCAL_C_INCLUDES) \
@@ -155,6 +172,7 @@ LOCAL_C_INCLUDES := $(LOCAL_C_INCLUDES) \
 	$(WEBCORE_PATH)/platform/image-decoders/jpeg \
 	$(WEBCORE_PATH)/platform/image-decoders/png \
 	$(WEBCORE_PATH)/platform/image-decoders/webp \
+	$(WEBCORE_PATH)/platform/image-encoders/skia \
 	$(WEBCORE_PATH)/platform/mock \
 	$(WEBCORE_PATH)/platform/network \
 	$(WEBCORE_PATH)/platform/network/android \
@@ -211,6 +229,21 @@ LOCAL_C_INCLUDES := $(LOCAL_C_INCLUDES) \
 
 LOCAL_CFLAGS += -DWEBKIT_IMPLEMENTATION=1
 
+# Needed for ANGLE
+LOCAL_C_INCLUDES := $(LOCAL_C_INCLUDES) \
+	external/angle/include/GLSLANG
+
+ifeq ($(ENABLE_WEBAUDIO),true)
+LOCAL_C_INCLUDES := $(LOCAL_C_INCLUDES) \
+	external/kissfft \
+	frameworks/native/include/media/openmax \
+	$(WEBCORE_PATH)/platform/audio \
+	$(WEBCORE_PATH)/platform/audio/android \
+	$(WEBCORE_PATH)/webaudio \
+	$(WEBKIT_PATH)/android/webaudio \
+	$(WEBKIT_PATH)/android/neon
+endif
+
 # Include WTF source file.
 d := Source/JavaScriptCore
 LOCAL_PATH := $(BASE_PATH)/$d
@@ -243,6 +276,11 @@ WEBKIT_SRC_FILES += $(addprefix $d/,$(LOCAL_SRC_FILES))
 LOCAL_PATH := $(BASE_PATH)
 
 # Define our compiler flags
+ifeq ($(DYNAMIC_SHARED_LIBV8SO), true)
+LOCAL_CFLAGS += -DENABLE_WORKERS=1
+LOCAL_CFLAGS += -DENABLE_SHARED_WORKERS=1
+endif
+LOCAL_CFLAGS += -DENABLE_CHANNEL_MESSAGING=1
 LOCAL_CFLAGS += -Wno-endif-labels -Wno-import -Wno-format
 LOCAL_CFLAGS += -fno-strict-aliasing
 LOCAL_CFLAGS += -include "WebCorePrefix.h"
@@ -277,6 +315,10 @@ ifeq ($(TARGET_ARCH),x86)
 LOCAL_CFLAGS += -DANDROID_LARGE_MEMORY_DEVICE
 endif
 
+ifeq ($(ARCH_ARM_HAVE_NEON),true)
+LOCAL_CFLAGS += -D__USE_ARM_NEON__
+endif
+
 ifeq ($(ENABLE_SVG),true)
 LOCAL_CFLAGS += -DENABLE_SVG=1 -DENABLE_SVG_ANIMATION=1
 endif
@@ -287,6 +329,12 @@ endif
 
 ifeq ($(ENABLE_WTF_USE_ACCELERATED_COMPOSITING),true)
 LOCAL_CFLAGS += -DWTF_USE_ACCELERATED_COMPOSITING=1
+endif
+
+LOCAL_CFLAGS += -DENABLE_REQUEST_ANIMATION_FRAME=1
+
+ifeq ($(ENABLE_WEBGL),true)
+LOCAL_CFLAGS += -DENABLE_WEBGL
 endif
 
 # LOCAL_LDLIBS is used in simulator builds only and simulator builds are only
@@ -319,6 +367,10 @@ LOCAL_SHARED_LIBRARIES := \
 	libui \
 	libz
 
+ifeq ($(ENABLE_WEBAUDIO),true)
+LOCAL_SHARED_LIBRARIES += libstagefright
+endif
+
 # We have to fake out some headers when using stlport.
 LOCAL_C_INCLUDES += \
 	external/chromium/android
@@ -329,12 +381,30 @@ ifeq ($(SUPPORT_COMPLEX_SCRIPTS),true)
 LOCAL_C_INCLUDES := $(LOCAL_C_INCLUDES) \
 	external/harfbuzz/src \
 	external/harfbuzz/contrib
-LOCAL_SHARED_LIBRARIES += libharfbuzz
+LOCAL_SHARED_LIBRARIES += libharfbuzz libjpeg
 LOCAL_CFLAGS += -DSUPPORT_COMPLEX_SCRIPTS=1
 endif
 
 # Build the list of static libraries
-LOCAL_STATIC_LIBRARIES := libxml2 libxslt libhyphenation libskiagpu libv8
+LOCAL_STATIC_LIBRARIES := libxml2 libxslt libhyphenation libskiagpu
+
+ifeq ($(DYNAMIC_SHARED_LIBV8SO),true)
+LOCAL_SHARED_LIBRARIES += libv8
+else
+LOCAL_STATIC_LIBRARIES += libv8
+endif
+
+ifeq ($(ENABLE_WEBGL),true)
+LOCAL_STATIC_LIBRARIES += libpng
+endif
+
+# WebAudio
+ifeq ($(ENABLE_WEBAUDIO),true)
+    LOCAL_STATIC_LIBRARIES += libkissfft
+    ifeq ($(ARCH_ARM_HAVE_NEON),true)
+        LOCAL_STATIC_LIBRARIES += libvmathneon
+    endif
+endif
 
 ifeq ($(ENABLE_AUTOFILL),true)
 LOCAL_SHARED_LIBRARIES += libexpat
@@ -360,6 +430,24 @@ endif
 # Build the library all at once
 include $(BUILD_STATIC_LIBRARY)
 
+# Build ANGLE as a static library.
+include $(CLEAR_VARS)
+LOCAL_MODULE := libangle
+LOCAL_MODULE_CLASS := STATIC_LIBRARIES
+LOCAL_MODULE_TAGS := optional
+ANGLE_PATH := external/angle
+LOCAL_SHARED_LIBRARIES := $(WEBKIT_SHARED_LIBRARIES)
+include $(SOURCE_PATH)/ThirdParty/ANGLE/Android.mk
+# Redefine LOCAL_SRC_FILES with the correct prefix
+LOCAL_SRC_FILES := $(addprefix ../angle/,$(LOCAL_SRC_FILES))
+# Append angle intermediate include paths to the WebKit include list.
+LOCAL_C_INCLUDES := $(WEBKIT_C_INCLUDES) \
+	$(ANGLE_PATH)/include \
+	$(ANGLE_PATH)/src
+LOCAL_CFLAGS += -Wno-error=non-virtual-dtor
+# Build libangle
+include $(BUILD_STATIC_LIBRARY)
+
 # Now build the shared library using only the exported jni entry point. This
 # will strip out any unused code from the entry point.
 include $(CLEAR_VARS)
@@ -371,6 +459,7 @@ LOCAL_MODULE := libwebcore
 LOCAL_LDLIBS := $(WEBKIT_LDLIBS)
 LOCAL_SHARED_LIBRARIES := $(WEBKIT_SHARED_LIBRARIES)
 LOCAL_STATIC_LIBRARIES := libwebcore $(WEBKIT_STATIC_LIBRARIES)
+LOCAL_STATIC_LIBRARIES += libangle
 LOCAL_LDFLAGS := -fvisibility=hidden
 LOCAL_CFLAGS := $(WEBKIT_CFLAGS)
 LOCAL_CPPFLAGS := $(WEBKIT_CPPFLAGS)
@@ -409,5 +498,16 @@ include $(BUILD_SHARED_LIBRARY)
 # Build the wds client
 include $(WEBKIT_PATH)/android/wds/client/Android.mk
 
+ifeq ($(ENABLE_WEBAUDIO),true)
+ifeq ($(ARCH_ARM_HAVE_NEON),true)
+# Build the VectorMath NEON routines
+include $(WEBKIT_PATH)/android/neon/Android.mk
+endif
+endif
+
 # Build the webkit merge tool.
 include $(BASE_PATH)/Tools/android/webkitmerge/Android.mk
+
+ifeq ($(ENABLE_WEBAUDIO),true)
+include $(BASE_PATH)/Source/WebCore/platform/audio/resources/webaudiores/Android.mk
+endif

@@ -1,5 +1,7 @@
 ##
 ## Copyright 2009, The Android Open Source Project
+## Copyright (C) 2011, Sony Ericsson Mobile Communications AB
+## Copyright (C) 2012 Sony Mobile Communications AB
 ##
 ## Redistribution and use in source and binary forms, with or without
 ## modification, are permitted provided that the following conditions
@@ -25,8 +27,15 @@
 
 LOCAL_CFLAGS += -DWTF_USE_V8=1
 
+ifeq ($(DYNAMIC_SHARED_LIBV8SO),true)
 BINDING_C_INCLUDES := \
-	external/v8/include \
+	vendor/qcom/opensource/v8/include
+else
+BINDING_C_INCLUDES := \
+	external/v8/include
+endif
+
+BINDING_C_INCLUDES += \
 	\
 	$(LOCAL_PATH)/bindings/v8 \
 	$(LOCAL_PATH)/bindings/v8/custom \
@@ -43,14 +52,12 @@ BINDING_C_INCLUDES := \
 LOCAL_SRC_FILES += \
 	bindings/ScriptControllerBase.cpp \
 	\
-	bindings/v8/ChildThreadDOMData.cpp \
 	bindings/v8/DateExtension.cpp \
 	bindings/v8/DOMData.cpp \
 	bindings/v8/DOMDataStore.cpp \
 	bindings/v8/DOMWrapperWorld.cpp \
 	bindings/v8/IDBBindingUtilities.cpp \
 	bindings/v8/IsolatedWorld.cpp \
-	bindings/v8/MainThreadDOMData.cpp \
 	bindings/v8/NPV8Object.cpp \
 	bindings/v8/RetainedDOMInfo.cpp \
 	bindings/v8/ScheduledAction.cpp \
@@ -88,6 +95,7 @@ LOCAL_SRC_FILES += \
 	bindings/v8/V8NodeFilterCondition.cpp \
 	bindings/v8/V8Proxy.cpp \
 	bindings/v8/V8Utilities.cpp \
+	bindings/v8/V8WorkerContextErrorHandler.cpp \
 	bindings/v8/V8WindowErrorHandler.cpp \
 	bindings/v8/V8WorkerContextEventListener.cpp \
 	bindings/v8/WorkerContextExecutionProxy.cpp \
@@ -171,8 +179,14 @@ LOCAL_SRC_FILES += \
 	bindings/v8/custom/V8Uint16ArrayCustom.cpp \
 	bindings/v8/custom/V8Uint32ArrayCustom.cpp \
 	bindings/v8/custom/V8Uint8ArrayCustom.cpp \
+	bindings/v8/custom/V8Uint8ClampedArrayCustom.cpp \
 	bindings/v8/custom/V8WebKitAnimationCustom.cpp \
 	bindings/v8/custom/V8WebSocketCustom.cpp
+
+ifeq ($(ENABLE_WEBGL), true)
+LOCAL_SRC_FILES += \
+	bindings/v8/custom/V8WebGLRenderingContextCustom.cpp
+endif
 
 ifeq ($(ENABLE_SVG), true)
 LOCAL_SRC_FILES += \
@@ -180,6 +194,13 @@ LOCAL_SRC_FILES += \
 	bindings/v8/custom/V8SVGElementCustom.cpp \
 	bindings/v8/custom/V8SVGLengthCustom.cpp \
 	bindings/v8/custom/V8SVGPathSegCustom.cpp
+endif
+
+ifeq ($(ENABLE_WEBAUDIO), true)
+LOCAL_SRC_FILES += \
+	bindings/v8/custom/V8AudioBufferSourceNodeCustom.cpp \
+	bindings/v8/custom/V8AudioContextCustom.cpp \
+	bindings/v8/custom/V8AudioNodeCustom.cpp
 endif
 
 LOCAL_SRC_FILES += \

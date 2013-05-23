@@ -30,6 +30,8 @@
 #define MAX_CONTRAST 5
 #define DEBUG_MATRIX 0
 
+class SkBitmap;
+
 namespace WebCore {
 
 class DrawQuadData;
@@ -114,6 +116,13 @@ struct ShaderResource {
     GLuint fragmentShader;
 };
 
+struct FrameCaptureState {
+    GLint viewport[4];
+    GLuint previousFbo;
+    GLuint frameFbo;
+    GLuint frameTexture;
+};
+
 class ShaderProgram {
 public:
     ShaderProgram();
@@ -135,6 +144,8 @@ public:
     void drawQuad(const DrawQuadData* data);
     void drawVideoLayerQuad(const TransformationMatrix& drawMatrix,
                      float* textureMatrix, SkRect& geometry, int textureId);
+    void drawVideoLayerToBitmap(float* textureMatrix, const SkRect& geometry,
+                     int textureId, SkBitmap& bitmap);
     FloatRect rectInInvViewCoord(const TransformationMatrix& drawMatrix,
                                 const IntSize& size);
     FloatRect rectInViewCoord(const TransformationMatrix& drawMatrix,
@@ -165,6 +176,16 @@ public:
     bool needsInit() { return m_needsInit; }
     bool usePointSampling(float tileScale, const TransformationMatrix* layerTransform);
 
+    //Getters
+    FloatRect& getClipRect()    { return m_clipRect;    }
+    int& getTitleBarHeight()    { return m_titleBarHeight;  }
+
+    FloatRect& getContentViewport() {   return m_contentViewport; }
+    TransformationMatrix& getSurfaceProjectionMatrix() { return m_surfaceProjectionMatrix; }
+    TransformationMatrix& getClipProjectionMatrix()     { return m_clipProjectionMatrix;    }
+    TransformationMatrix& getVisibleContentRectProjectionMatrix() { return m_visibleContentRectProjectionMatrix; }
+    void resetCachedStates()    { m_cachedProgramType = UndefinedShader ; m_cachedOpacity = -1; glBindBuffer(GL_ARRAY_BUFFER, m_textureBuffer[0]); }
+
 private:
     GLuint loadShader(GLenum shaderType, const char* pSource);
     GLint createProgram(const char* vertexSource, const char* fragmentSource);
@@ -179,6 +200,9 @@ private:
     ShaderType getTextureShaderType(GLenum textureTarget, bool hasRepeatScale);
     void resetBlending();
     void setupSurfaceProjectionMatrix();
+    void drawToBitmapSetup(SkBitmap& bitmap);
+    void drawToBitmapRestore();
+
 #if DEBUG_MATRIX
     FloatRect debugMatrixTransform(const TransformationMatrix& matrix, const char* matrixName);
     void debugMatrixInfo(float currentScale,
@@ -237,6 +261,7 @@ private:
     GLfloat m_cachedOpacity;
     FloatRect m_cachedFillPortion;
     Color m_cachedPureColor;
+    FrameCaptureState m_frameCaptureState;
 };
 
 } // namespace WebCore

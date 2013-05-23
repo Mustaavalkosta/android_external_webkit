@@ -1,5 +1,8 @@
 /*
  * Copyright 2006, The Android Open Source Project
+ * Copyright (C) 2011-2013 The Linux Foundation All rights reserved.
+ * Copyright (C) 2012 Sony Ericsson Mobile Communications AB.
+ * Copyright (C) 2012 Sony Mobile Communications AB
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -33,6 +36,9 @@
 #include "ApplicationCacheStorage.h"
 #include "Attribute.h"
 #include "content/address_detector.h"
+#if ENABLE(WEB_AUDIO)
+#include "AudioDestination.h"
+#endif
 #include "Chrome.h"
 #include "ChromeClientAndroid.h"
 #include "ChromiumIncludes.h"
@@ -126,6 +132,7 @@
 #include "TextIterator.h"
 #include "TilesManager.h"
 #include "TypingCommand.h"
+#include "V8Binding.h"
 #include "WebCache.h"
 #include "WebCoreFrameBridge.h"
 #include "WebCoreJni.h"
@@ -286,6 +293,7 @@ jobject WebViewCore::getApplicationContext() {
 
 struct WebViewCoreStaticMethods {
     jmethodID    m_isSupportedMediaMimeType;
+    jmethodID    m_isPlayListMimeType;
 } gWebViewCoreStaticMethods;
 
 // Check whether a media mimeType is supported in Android media framework.
@@ -295,6 +303,19 @@ bool WebViewCore::isSupportedMediaMimeType(const WTF::String& mimeType) {
     jclass webViewCore = env->FindClass("android/webkit/WebViewCore");
     bool val = env->CallStaticBooleanMethod(webViewCore,
           gWebViewCoreStaticMethods.m_isSupportedMediaMimeType, jMimeType);
+    checkException(env);
+    env->DeleteLocalRef(webViewCore);
+    env->DeleteLocalRef(jMimeType);
+
+    return val;
+}
+
+bool WebViewCore::isPlayListMimeType(const WTF::String& mimeType) {
+    JNIEnv* env = JSC::Bindings::getJNIEnv();
+    jstring jMimeType = wtfStringToJstring(env, mimeType);
+    jclass webViewCore = env->FindClass("android/webkit/WebViewCore");
+    bool val = env->CallStaticBooleanMethod(webViewCore,
+          gWebViewCoreStaticMethods.m_isPlayListMimeType, jMimeType);
     checkException(env);
     env->DeleteLocalRef(webViewCore);
     env->DeleteLocalRef(jMimeType);
@@ -545,7 +566,7 @@ WebViewCore::WebViewCore(JNIEnv* env, jobject javaWebViewCore, WebCore::Frame* m
     // libwebcore gets loaded. We now need to associate the WebCore thread with V8 to complete
     // initialisation.
     v8::V8::Initialize();
-
+    WebCore::V8BindingPerIsolateData::ensureInitialized(v8::Isolate::GetCurrent());
     // Configure any RuntimeEnabled features that we need to change from their default now.
     // See WebCore/bindings/generic/RuntimeEnabledFeatures.h
 
@@ -2015,6 +2036,44 @@ AndroidHitTestResult WebViewCore::hitTestAtPoint(int x, int y, int slop, bool do
 
 ///////////////////////////////////////////////////////////////////////////////
 
+#if ENABLE(WEB_AUDIO)
+void WebViewCore::addAudioDestination(WebCore::AudioDestination* t)
+{
+//    SkDebugf("----------- addAudioDestination %p", t);
+    *m_audioDestinations.append() = t;
+}
+
+void WebViewCore::removeAudioDestination(WebCore::AudioDestination* t)
+{
+//    SkDebugf("----------- removeAudioDestination %p", t);
+    int index = m_audioDestinations.find(t);
+    if (index < 0) {
+        SkDebugf("--------------- removeAudioDestination not found! %p\n", t);
+    } else {
+        m_audioDestinations.removeShuffle(index);
+    }
+}
+
+void WebViewCore::pauseAudioDestinations()
+{
+    WebCore::AudioDestination** iter = m_audioDestinations.begin();
+    WebCore::AudioDestination** stop = m_audioDestinations.end();
+
+    for (; iter < stop; ++iter)
+        (*iter)->pause();
+}
+
+void WebViewCore::resumeAudioDestinations()
+{
+    WebCore::AudioDestination** iter = m_audioDestinations.begin();
+    WebCore::AudioDestination** stop = m_audioDestinations.end();
+
+    for (; iter < stop; ++iter)
+        (*iter)->start();
+}
+#endif
+///////////////////////////////////////////////////////////////////////////////
+
 void WebViewCore::addPlugin(PluginWidgetAndroid* w)
 {
 //    SkDebugf("----------- addPlugin %p", w);
@@ -2575,7 +2634,7 @@ Node* WebViewCore::getNextAnchorNode(Node* anchorNode, bool ignoreFirstNode, int
                 || isContentInputElement(currentNode))
             return currentNode;
         if (direction == DIRECTION_FORWARD)
-            currentNode = currentNode->traverseNextNode();
+            currentNode = currentNode->traverseNextNodeFastPath();
         else
             currentNode = currentNode->traversePreviousNodePostOrder(body);
     }
@@ -2697,7 +2756,7 @@ Node* WebViewCore::getIntermediaryInputElement(Node* fromNode, Node* toNode, int
         while (currentNode && currentNode != toNode) {
             if (isContentInputElement(currentNode))
                 return currentNode;
-            currentNode = currentNode->traverseNextNode();
+            currentNode = currentNode->traverseNextNodeFastPath();
         }
     } else {
         Node* currentNode = fromNode->traversePreviousNode();
@@ -4861,6 +4920,15 @@ static void Pause(JNIEnv* env, jobject obj, jint nativeClass)
 
     WebViewCore* viewImpl = reinterpret_cast<WebViewCore*>(nativeClass);
     Frame* mainFrame = viewImpl->mainFrame();
+
+    for (Frame* frame = mainFrame; frame; frame = frame->tree()->traverseNext()) {
+#if ENABLE(WEBGL)
+        Document* document = frame->document();
+        if (document)
+            document->suspendDocument();
+#endif
+    }
+
     if (mainFrame)
         mainFrame->settings()->setMinDOMTimerInterval(BACKGROUND_TIMER_INTERVAL);
 
@@ -4871,12 +4939,26 @@ static void Pause(JNIEnv* env, jobject obj, jint nativeClass)
     SkANP::InitEvent(&event, kLifecycle_ANPEventType);
     event.data.lifecycle.action = kPause_ANPLifecycleAction;
     viewImpl->sendPluginEvent(event);
+#if ENABLE(WEB_AUDIO)
+    viewImpl->pauseAudioDestinations();
+#endif
+
+    viewImpl->setIsPaused(true);
 }
 
 static void Resume(JNIEnv* env, jobject obj, jint nativeClass)
 {
     WebViewCore* viewImpl = reinterpret_cast<WebViewCore*>(nativeClass);
     Frame* mainFrame = viewImpl->mainFrame();
+
+    for (Frame* frame = mainFrame; frame; frame = frame->tree()->traverseNext()) {
+#if ENABLE(WEBGL)
+        Document* document = frame->document();
+        if (document)
+            document->resumeDocument();
+#endif
+    }
+
     if (mainFrame)
         mainFrame->settings()->setMinDOMTimerInterval(FOREGROUND_TIMER_INTERVAL);
 
@@ -4887,6 +4969,11 @@ static void Resume(JNIEnv* env, jobject obj, jint nativeClass)
     SkANP::InitEvent(&event, kLifecycle_ANPEventType);
     event.data.lifecycle.action = kResume_ANPLifecycleAction;
     viewImpl->sendPluginEvent(event);
+#if ENABLE(WEB_AUDIO)
+    viewImpl->resumeAudioDestinations();
+#endif
+
+    viewImpl->setIsPaused(false);
 }
 
 static void FreeMemory(JNIEnv* env, jobject obj, jint nativeClass)
@@ -5208,6 +5295,11 @@ int registerWebViewCore(JNIEnv* env)
         env->GetStaticMethodID(widget, "isSupportedMediaMimeType", "(Ljava/lang/String;)Z");
     LOG_FATAL_IF(!gWebViewCoreStaticMethods.m_isSupportedMediaMimeType,
         "Could not find static method isSupportedMediaMimeType from WebViewCore");
+
+    gWebViewCoreStaticMethods.m_isPlayListMimeType =
+        env->GetStaticMethodID(widget, "isPlayListMimeType", "(Ljava/lang/String;)Z");
+    LOG_FATAL_IF(!gWebViewCoreStaticMethods.m_isPlayListMimeType,
+        "Could not find static method isPlayListMimeType from WebViewCore");
 
     env->DeleteLocalRef(widget);
 

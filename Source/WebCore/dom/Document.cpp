@@ -7,6 +7,9 @@
  * Copyright (C) 2008, 2009 Torch Mobile Inc. All rights reserved. (http://www.torchmobile.com/)
  * Copyright (C) 2008, 2009 Google Inc. All rights reserved.
  * Copyright (C) 2010 Nokia Corporation and/or its subsidiary(-ies)
+ * Copyright (c) 2011, 2012 The Linux Foundation All rights reserved
+ * Copyright (C) 2011, 2012 Sony Ericsson Mobile Communications AB
+ * Copyright (C) 2012 Sony Mobile Communcations AB
  *
  * This library is free software; you can redistribute it and/or
  * modify it under the terms of the GNU Library General Public
@@ -107,6 +110,7 @@
 #include "NestingLevelIncrementer.h"
 #include "NodeFilter.h"
 #include "NodeIterator.h"
+#include "NodeRareData.h"
 #include "NodeWithIndex.h"
 #include "OverflowEvent.h"
 #include "Page.h"
@@ -156,6 +160,8 @@
 #include <wtf/PassRefPtr.h>
 #include <wtf/StdLibExtras.h>
 #include <wtf/text/StringBuffer.h>
+#include <wtf/text/CString.h>
+#include <cutils/properties.h>
 
 #if ENABLE(SHARED_WORKERS)
 #include "SharedWorkerRepository.h"
@@ -222,9 +228,16 @@
 #include "ScriptedAnimationController.h"
 #endif
 
+#if ENABLE(WEB_AUDIO)
+#include "AudioProcessingEvent.h"
+#include "OfflineAudioCompletionEvent.h"
+#endif
+
 using namespace std;
 using namespace WTF;
 using namespace Unicode;
+
+#include <StatHubCmdApi.h>
 
 namespace WebCore {
 
@@ -421,8 +434,12 @@ Document::Document(Frame* frame, const KURL& url, bool isXHTML, bool isHTML)
     , m_sawElementsInKnownNamespaces(false)
     , m_usingGeolocation(false)
     , m_eventQueue(EventQueue::create(this))
+    , m_documentRareData(0)
 #if ENABLE(WML)
     , m_containsWMLContent(false)
+#endif
+#if ENABLE(WEBGL) && PLATFORM(ANDROID)
+    , m_containsWebGLContent(false)
 #endif
     , m_weakReference(DocumentWeakReference::create(this))
     , m_idAttributeName(idAttr)
@@ -437,6 +454,9 @@ Document::Document(Frame* frame, const KURL& url, bool isXHTML, bool isHTML)
     , m_writingModeSetOnDocumentElement(false)
     , m_writeRecursionIsTooDeep(false)
     , m_writeRecursionDepth(0)
+    , m_externalJs(0)
+    , m_doObjPrfth(true)
+    , m_doJsCssPrfth(false)
 {
     m_document = this;
 
@@ -509,6 +529,12 @@ Document::Document(Frame* frame, const KURL& url, bool isXHTML, bool isHTML)
 #if ENABLE(XHTMLMP)
     m_shouldProcessNoScriptElement = !(m_frame && m_frame->script()->canExecuteScripts(NotAboutToExecuteScript));
 #endif
+
+    m_doObjPrfth = StatHubIsProcReady("pp_plugin");
+    char value[PROPERTY_VALUE_MAX] = {'\0'};
+    property_get("stathub.pp.prfthmod", value, "0");
+    if (atoi(value) == 1)
+        m_doJsCssPrfth = true;
 }
 
 Document::~Document()
@@ -567,6 +593,14 @@ Document::~Document()
 
     if (m_implementation)
         m_implementation->ownerDocumentDestroyed();
+
+    if (hasRareData()) {
+        ASSERT(m_documentRareData);
+        delete m_documentRareData;
+        m_documentRareData = 0;
+        clearFlag(HasRareDataFlag);
+    }
+    m_externalJs = 0;
 }
 
 void Document::removedLastRef()
@@ -1810,7 +1844,7 @@ void Document::removeAllEventListeners()
 
     if (DOMWindow* domWindow = this->domWindow())
         domWindow->removeAllEventListeners();
-    for (Node* node = firstChild(); node; node = node->traverseNextNode())
+    for (Node* node = firstChild(); node; node = node->traverseNextNodeFastPath())
         node->removeAllEventListeners();
 }
 
@@ -2316,11 +2350,26 @@ void Document::logExceptionToConsole(const String& errorMessage, int lineNumber,
     addMessage(JSMessageSource, messageType, ErrorMessageLevel, errorMessage, lineNumber, sourceURL, callStack);
 }
 
+static void updateDocumentUrl(const KURL& url) {
+
+    unsigned short main_url_len = url.string().length();
+
+    if (main_url_len && url.protocolInHTTPFamily()) {
+        StatHubCmd* cmd = StatHubCmdCreate(SH_CMD_WK_MAIN_URL, SH_ACTION_WILL_START);
+        if (NULL!=cmd) {
+            StatHubCmdAddParamAsString(cmd, url.string().latin1().data());
+            StatHubCmdCommit(cmd);
+        }
+    }
+}
+
 void Document::setURL(const KURL& url)
 {
     const KURL& newURL = url.isEmpty() ? blankURL() : url;
     if (newURL == m_url)
         return;
+
+    updateDocumentUrl(url);
 
     m_url = newURL;
     m_documentURI = m_url.string();
@@ -3593,6 +3642,12 @@ PassRefPtr<Event> Document::createEvent(const String& eventType, ExceptionCode& 
         event = WebKitTransitionEvent::create();
     else if (eventType == "WheelEvent")
         event = WheelEvent::create();
+#if ENABLE(WEB_AUDIO)
+    else if (eventType == "AudioProcessingEvent")
+        event = AudioProcessingEvent::create();
+    else if (eventType == "OfflineAudioCompletionEvent")
+        event = OfflineAudioCompletionEvent::create();
+#endif
 #if ENABLE(SVG)
     else if (eventType == "SVGEvents")
         event = Event::create();
@@ -3842,11 +3897,12 @@ static inline bool isValidNameASCII(const UChar* characters, unsigned length)
 
 bool Document::isValidName(const String& name)
 {
-    unsigned length = name.length();
-    if (!length)
+    if (name.isEmpty())
         return false;
 
-    const UChar* characters = name.characters();
+    StringImpl* impl = name.impl();
+    const UChar* characters = impl->characters();
+    unsigned length = impl->length();
     return isValidNameASCII(characters, length) || isValidNameNonASCII(characters, length);
 }
 
@@ -5026,15 +5082,15 @@ void Document::loadEventDelayTimerFired(Timer<Document>*)
 }
 
 #if ENABLE(REQUEST_ANIMATION_FRAME)
-int Document::webkitRequestAnimationFrame(PassRefPtr<RequestAnimationFrameCallback> callback, Element* animationElement)
+int Document::webkitRequestAnimationFrame(PassRefPtr<RequestAnimationFrameCallback> callback)
 {
     if (!m_scriptedAnimationController)
         m_scriptedAnimationController = ScriptedAnimationController::create(this);
 
-    return m_scriptedAnimationController->registerCallback(callback, animationElement);
+    return m_scriptedAnimationController->registerCallback(callback);
 }
 
-void Document::webkitCancelRequestAnimationFrame(int id)
+void Document::webkitCancelAnimationFrame(int id)
 {
     if (!m_scriptedAnimationController)
         return;
@@ -5082,4 +5138,29 @@ DocumentLoader* Document::loader() const
     return loader;
 }
 
+#if ENABLE(WEBGL) && PLATFORM(ANDROID)
+void Document::suspendDocument()
+{
+    HashSet<Element*>::iterator end = m_documentSuspendCallbackElements.end();
+    for (HashSet<Element*>::iterator i = m_documentSuspendCallbackElements.begin(); i != end; ++i)
+        (*i)->documentWasSuspended();
+}
+
+void Document::resumeDocument()
+{
+    HashSet<Element*>::iterator end = m_documentSuspendCallbackElements.end();
+    for (HashSet<Element*>::iterator i = m_documentSuspendCallbackElements.begin(); i != end; ++i)
+        (*i)->documentWillResume();
+}
+
+void Document::registerForDocumentSuspendCallbacks(Element* e)
+{
+    m_documentSuspendCallbackElements.add(e);
+}
+
+void Document::unregisterForDocumentSuspendCallbacks(Element* e)
+{
+    m_documentSuspendCallbackElements.remove(e);
+}
+#endif
 } // namespace WebCore

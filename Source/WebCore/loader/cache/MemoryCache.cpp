@@ -3,6 +3,7 @@
     Copyright (C) 2001 Dirk Mueller (mueller@kde.org)
     Copyright (C) 2002 Waldo Bastian (bastian@kde.org)
     Copyright (C) 2004, 2005, 2006, 2007, 2008 Apple Inc. All rights reserved.
+    Copyright (c) 2011, 2012 The Linux Foundation. All rights reserved
 
     This library is free software; you can redistribute it and/or
     modify it under the terms of the GNU Library General Public
@@ -41,6 +42,8 @@
 #include <stdio.h>
 #include <wtf/CurrentTime.h>
 #include <wtf/text/CString.h>
+
+#include <StatHubCmdApi.h>
 
 using namespace std;
 
@@ -93,7 +96,7 @@ bool MemoryCache::add(CachedResource* resource)
     
     resourceAccessed(resource);
     
-    LOG(ResourceLoading, "MemoryCache::add Added '%s', resource %p\n", resource->url().latin1().data(), resource);
+    LOG(ResourceLoading, "MemoryCache::add Added '%s', resource %p\n", resource->url().string().latin1().data(), resource);
     return true;
 }
 
@@ -323,7 +326,7 @@ bool MemoryCache::makeResourcePurgeable(CachedResource* resource)
 
 void MemoryCache::evict(CachedResource* resource)
 {
-    LOG(ResourceLoading, "Evicting resource %p for '%s' from cache", resource, resource->url().latin1().data());
+    LOG(ResourceLoading, "Evicting resource %p for '%s' from cache", resource, resource->url().string().latin1().data());
     // The resource may have already been removed by someone other than our caller,
     // who needed a fresh copy for a reload. See <http://bugs.webkit.org/show_bug.cgi?id=12479#c6>.
     if (resource->inCache()) {
@@ -636,6 +639,11 @@ MemoryCache::Statistics MemoryCache::getStatistics()
 
 void MemoryCache::setDisabled(bool disabled)
 {
+    StatHubCmd* cmd = StatHubCmdCreate(SH_CMD_WK_MEMORY_CACHE, SH_ACTION_CLEAR);
+    if (NULL!=cmd) {
+        StatHubCmdCommit(cmd);
+    }
+
     m_disabled = disabled;
     if (!m_disabled)
         return;
