@@ -64,7 +64,7 @@ class Node;
 class RTree {
 public:
     // M -- max number of children per node
-    RTree(WebCore::LinearAllocator* allocator, int M = 10);
+    RTree(WebCore::LinearAllocator* allocator, int M = 20);
     ~RTree();
 
     void insert(WebCore::IntRect& bounds, WebCore::RecordingData* payload);

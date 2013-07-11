@@ -225,7 +225,7 @@ CanvasRenderingContext* HTMLCanvasElement::getContext(const String& type, Canvas
                 usesDashbardCompatibilityMode = settings->usesDashboardBackwardCompatibilityMode();
 #endif
             m_context = adoptPtr(new CanvasRenderingContext2D(this, document()->inQuirksMode(), usesDashbardCompatibilityMode));
-#if USE(IOSURFACE_CANVAS_BACKING_STORE) || (ENABLE(ACCELERATED_2D_CANVAS) && USE(ACCELERATED_COMPOSITING))
+#if USE(IOSURFACE_CANVAS_BACKING_STORE) || (ENABLE(ACCELERATED_2D_CANVAS) && USE(ACCELERATED_COMPOSITING)) || PLATFORM(ANDROID)
             if (m_context) {
                 // Need to make sure a RenderLayer and compositing layer get created for the Canvas
                 setNeedsStyleRecalc(SyntheticStyleChange);
@@ -350,9 +350,9 @@ void HTMLCanvasElement::paint(GraphicsContext* context, const IntRect& r)
         ImageBuffer* imageBuffer = buffer();
         if (imageBuffer) {
 
-#if PLATFORM(ANDROID)
-            return;     //Prevent old-style canvas rendering (causes ghosting background images)
-#endif
+            if(imageBuffer->drawsUsingRecording())
+                return;
+
             if (m_presentedImage)
                 context->drawImage(m_presentedImage.get(), ColorSpaceDeviceRGB, r);
             else if (imageBuffer->drawsUsingCopy())
